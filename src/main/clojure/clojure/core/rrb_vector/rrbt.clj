@@ -511,7 +511,8 @@
   (seq [this]
     (if (zero? cnt)
       nil
-      (VecSeq. am this (.arrayFor this 0) 0 0)))
+      (with-meta (clojure.lang.APersistentVector$Seq. this 0)
+        (meta this))))
 
   clojure.lang.Sequential
 
