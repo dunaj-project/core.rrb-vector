@@ -1,5 +1,5 @@
 (ns clojure.core.rrb-vector.rrbt
-  (:refer-clojure :exclude [assert])
+  (:refer-clojure :exclude [assert ->VecSeq])
   (:require [clojure.core.rrb-vector.protocols
              :refer [PSliceableVector slicev
                      PSpliceableVector splicev]]
@@ -13,7 +13,7 @@
             [clojure.core.rrb-vector.fork-join :as fj]
             [clojure.core.protocols :refer [IKVReduce]]
             [clojure.core.reducers :as r :refer [CollFold coll-fold]])
-  (:import (clojure.core ArrayManager Vec VecSeq)
+  (:import (clojure.core ArrayManager Vec ArrayChunk)
            (clojure.lang RT Util Box PersistentVector
                          APersistentVector$SubVector)
            (clojure.core.rrb_vector.nodes NodeManager)
@@ -35,6 +35,32 @@
 
 (defmacro dbg- [& args])
 
+(defn ^:private throw-unsupported []
+  (throw (UnsupportedOperationException.)))
+
+(defmacro compile-if [test then else]
+  (if (eval test)
+    then
+    else))
+
+(defmacro ^:private caching-hash [coll hash-fn hash-key]
+  `(let [h# ~hash-key]
+     (if-not (== h# (int -1))
+       h#
+       (let [h# (~hash-fn ~coll)]
+         (set! ~hash-key (int h#))
+         h#))))
+
+(defn ^:private hash-gvec-seq [xs]
+  (let [cnt (count xs)]
+    (loop [h (int 1) xs (seq xs)]
+      (if xs
+        (let [x (first xs)]
+          (recur (unchecked-add-int (unchecked-multiply-int 31 h)
+                                    (clojure.lang.Util/hash x))
+                 (next xs)))
+        h))))
+
 (definterface IVecImpl
   (^int tailoff [])
   (arrayFor [^int i])
@@ -42,6 +68,228 @@
   (popTail [^int shift ^int cnt node])
   (newPath [^java.util.concurrent.atomic.AtomicReference edit ^int shift node])
   (doAssoc [^int shift node ^int i val]))
+
+(deftype VecSeq [^ArrayManager am ^IVecImpl vec anode ^int i ^int offset
+                 ^clojure.lang.IPersistentMap _meta
+                 ^:unsynchronized-mutable ^int _hash
+                 ^:unsynchronized-mutable ^int _hasheq]
+  clojure.core.protocols/InternalReduce
+  (internal-reduce
+   [_ f val]
+   (loop [result val
+          aidx offset]
+     (if (< aidx (count vec))
+       (let [node (.arrayFor vec aidx)
+             alen (.alength am node)
+             result (loop [result result
+                           node-idx 0]
+                      (if (< node-idx alen)
+                        (let [result (f result (.aget am node node-idx))]
+                          (if (reduced? result)
+                            result
+                            (recur result (inc node-idx))))
+                        result))]
+         (if (reduced? result)
+           @result
+           (recur result (+ aidx alen))))
+       result)))
+
+  Object
+  (toString [this]
+    (pr-str this))
+
+  (hashCode [this]
+    (caching-hash this hash-gvec-seq _hash))
+
+  (equals [this that]
+    (cond
+      (identical? this that) true
+      (not (or (sequential? that) (instance? java.util.List that))) false
+      :else
+      (loop [xs this ys (seq that)]
+        (if xs
+          (if ys
+            (if (clojure.lang.Util/equals (first xs) (first ys))
+              (recur (next xs) (next ys))
+              false)
+            false)
+          (nil? ys)))))
+
+  clojure.lang.IHashEq
+  (hasheq [this]
+    (if (== _hasheq (int -1))
+      (compile-if (resolve 'clojure.core/hash-ordered-coll)
+        (let [h (hash-ordered-coll this)]
+          (do (set! _hasheq (int h))
+              h))
+        (loop [h (int 1) xs (seq this)]
+          (if xs
+            (recur (unchecked-add-int (unchecked-multiply-int (int 31) h)
+                                      (Util/hasheq (first xs)))
+                   (next xs))
+            (do (set! _hasheq (int h))
+                h))))
+      _hasheq))
+
+  clojure.lang.IMeta
+  (meta [this]
+    _meta)
+
+  clojure.lang.IObj
+  (withMeta [this m]
+    (VecSeq. am vec anode i offset m _hash _hasheq))
+
+  clojure.lang.Counted
+  (count [this]
+    (unchecked-subtract-int
+      (unchecked-subtract-int (count vec) i)
+      offset))
+
+  clojure.lang.ISeq
+  (first [_] (.aget am anode offset))
+  (next [this]
+    (if (< (inc offset) (.alength am anode))
+      (VecSeq. am vec anode i (inc offset) nil -1 -1)
+      (.chunkedNext this)))
+  (more [this]
+    (let [s (.next this)]
+      (or s (clojure.lang.PersistentList/EMPTY))))
+  (cons [this o]
+    (clojure.lang.Cons. o this))
+  (equiv [this o]
+    (cond
+     (identical? this o) true
+     (or (instance? clojure.lang.Sequential o) (instance? java.util.List o))
+     (loop [me this
+            you (seq o)]
+       (if (nil? me)
+         (nil? you)
+         (and (clojure.lang.Util/equiv (first me) (first you))
+              (recur (next me) (next you)))))
+     :else false))
+  (empty [_]
+    clojure.lang.PersistentList/EMPTY)
+
+  clojure.lang.Seqable
+  (seq [this] this)
+
+  clojure.lang.IChunkedSeq
+  (chunkedFirst [_] (ArrayChunk. am anode offset (.alength am anode)))
+  (chunkedNext [_]
+   (let [nexti (+ i (.alength am anode))]
+     (when (< nexti (count vec))
+       (VecSeq. am vec (.arrayFor vec nexti) nexti 0 nil -1 -1))))
+  (chunkedMore [this]
+    (let [s (.chunkedNext this)]
+      (or s (clojure.lang.PersistentList/EMPTY))))
+
+  java.lang.Iterable
+  (iterator [this]
+    (let [xs (clojure.lang.Box. (seq this))]
+      (reify java.util.Iterator
+        (next [this]
+          (locking xs
+            (if-let [v (.-val xs)]
+              (let [x (first v)]
+                (set! (.-val xs) (next v))
+                x)
+              (throw
+                (java.util.NoSuchElementException.
+                  "no more elements in VecSeq iterator")))))
+        (hasNext [this]
+          (locking xs
+            (not (nil? (.-val xs)))))
+        (remove [this]
+          (throw-unsupported)))))
+
+  java.io.Serializable
+
+  java.util.Collection
+  (contains [this o]
+    (boolean (some #(= % o) this)))
+
+  (containsAll [this c]
+    (every? #(.contains this %) c))
+
+  (isEmpty [this]
+    (zero? (count this)))
+
+  (toArray [this]
+    (into-array Object this))
+
+  (toArray [this arr]
+    (let [cnt (count this)]
+      (if (>= (count arr) cnt)
+        (do (dotimes [i cnt]
+              (aset arr i (nth vec i)))
+            arr)
+        (into-array Object this))))
+
+  (size [this]
+    (count this))
+
+  (add [_ o]             (throw-unsupported))
+  (addAll [_ c]          (throw-unsupported))
+  (clear [_]             (throw-unsupported))
+  (^boolean remove [_ o] (throw-unsupported))
+  (removeAll [_ c]       (throw-unsupported))
+  (retainAll [_ c]       (throw-unsupported))
+
+  java.util.List
+  (get [this i]
+    (nth this i))
+
+  (indexOf [this o]
+    (loop [xs (seq this) i 0]
+      (if xs
+        (let [x (first xs)]
+          (if (= o x)
+            i
+            (recur (next xs) (unchecked-inc-int i))))
+        -1)))
+
+  (lastIndexOf [this o]
+    (loop [xs (rseq vec)
+           l  (unchecked-dec-int (- (count vec) i))]
+      (cond
+        (neg? l) -1
+        (= o (first xs)) l
+        :else (recur (next xs) (unchecked-dec-int l)))))
+
+  (listIterator [this]
+    (.listIterator this 0))
+
+  (listIterator [this n]
+    (let [n (java.util.concurrent.atomic.AtomicInteger. n)]
+      (reify java.util.ListIterator
+        (hasNext [_] (< (.get n) (count this)))
+        (hasPrevious [_] (pos? n))
+        (next [_]
+          (try
+            (nth vec (unchecked-add-int i
+                       (unchecked-add-int offset
+                         (unchecked-dec-int (.incrementAndGet n)))))
+            (catch IndexOutOfBoundsException e
+              (throw (java.util.NoSuchElementException.
+                       "no more elements in VecSeq list iterator")))))
+        (nextIndex [_] (.get n))
+        (previous [_] (nth vec (unchecked-add i
+                                 (unchecked-add offset
+                                   (.decrementAndGet n)))))
+        (previousIndex [_] (unchecked-dec-int (.get n)))
+        (add [_ e]  (throw-unsupported))
+        (remove [_] (throw-unsupported))
+        (set [_ e]  (throw-unsupported)))))
+
+  (subList [this a z]
+    (seq (slicev vec
+           (unchecked-add (unchecked-add i offset) a)
+           (unchecked-add (unchecked-add i offset) z))))
+
+  (add [_ i o]               (throw-unsupported))
+  (addAll [_ i c]            (throw-unsupported))
+  (^Object remove [_ ^int i] (throw-unsupported))
+  (set [_ i e]               (throw-unsupported)))
 
 (defprotocol AsRRBT
   (as-rrbt [v]))
@@ -251,13 +499,17 @@
   clojure.lang.IHashEq
   (hasheq [this]
     (if (== _hasheq (int -1))
-      (loop [h (int 1) xs (seq this)]
-        (if xs
-          (recur (unchecked-add-int (unchecked-multiply-int (int 31) h)
-                                    (Util/hasheq (first xs)))
-                 (next xs))
+      (compile-if (resolve 'clojure.core/hash-ordered-coll)
+        (let [h (hash-ordered-coll this)]
           (do (set! _hasheq (int h))
-              h)))
+              h))
+        (loop [h (int 1) xs (seq this)]
+          (if xs
+            (recur (unchecked-add-int (unchecked-multiply-int (int 31) h)
+                                      (Util/hasheq (first xs)))
+                   (next xs))
+            (do (set! _hasheq (int h))
+                h))))
       _hasheq))
 
   clojure.lang.Counted
@@ -504,15 +756,14 @@
         2 (throw (clojure.lang.ArityException.
                   n (.. this (getClass) (getSimpleName)))))))
 
-  ;; hack to reuse gvec's chunked seqs
-  clojure.core.IVecImpl
-
   clojure.lang.Seqable
   (seq [this]
     (if (zero? cnt)
       nil
-      (with-meta (clojure.lang.APersistentVector$Seq. this 0)
-        (meta this))))
+      ;; TODO: check is VecSeq is OK for primitive sections
+      #_(with-meta (clojure.lang.APersistentVector$Seq. this 0)
+          (meta this))
+      (VecSeq. am this (.arrayFor this 0) 0 0 nil -1 -1)))
 
   clojure.lang.Sequential
 
@@ -887,8 +1138,13 @@
     (let [i (java.util.concurrent.atomic.AtomicInteger. 0)]
       (reify java.util.Iterator
         (hasNext [_] (< (.get i) cnt))
-        (next [_] (.nth this (unchecked-dec-int (.incrementAndGet i))))
-        (remove [_] (throw (UnsupportedOperationException.))))))
+        (next [_]
+          (try
+            (.nth this (unchecked-dec-int (.incrementAndGet i)))
+            (catch IndexOutOfBoundsException e
+              (throw (java.util.NoSuchElementException.
+                       "no more elements in RRB vector iterator")))))
+        (remove [_] (throw-unsupported)))))
 
   java.util.Collection
   (contains [this o]
@@ -912,12 +1168,12 @@
 
   (size [_] cnt)
 
-  (add [_ o] (throw (UnsupportedOperationException.)))
-  (addAll [_ c] (throw (UnsupportedOperationException.)))
-  (clear [_] (throw (UnsupportedOperationException.)))
-  (^boolean remove [_ o] (throw (UnsupportedOperationException.)))
-  (removeAll [_ c] (throw (UnsupportedOperationException.)))
-  (retainAll [_ c] (throw (UnsupportedOperationException.)))
+  (add [_ o]             (throw-unsupported))
+  (addAll [_ c]          (throw-unsupported))
+  (clear [_]             (throw-unsupported))
+  (^boolean remove [_ o] (throw-unsupported))
+  (removeAll [_ c]       (throw-unsupported))
+  (retainAll [_ c]       (throw-unsupported))
 
   java.util.RandomAccess
   java.util.List
@@ -945,21 +1201,26 @@
       (reify java.util.ListIterator
         (hasNext [_] (< (.get i) cnt))
         (hasPrevious [_] (pos? i))
-        (next [_] (.nth this (unchecked-dec-int (.incrementAndGet i))))
+        (next [_]
+          (try
+            (.nth this (unchecked-dec-int (.incrementAndGet i)))
+            (catch IndexOutOfBoundsException e
+              (throw (java.util.NoSuchElementException.
+                       "no more elements in RRB vector list iterator")))))
         (nextIndex [_] (.get i))
         (previous [_] (.nth this (.decrementAndGet i)))
         (previousIndex [_] (unchecked-dec-int (.get i)))
-        (add [_ e] (throw (UnsupportedOperationException.)))
-        (remove [_] (throw (UnsupportedOperationException.)))
-        (set [_ e] (throw (UnsupportedOperationException.))))))
+        (add [_ e]  (throw-unsupported))
+        (remove [_] (throw-unsupported))
+        (set [_ e]  (throw-unsupported)))))
 
   (subList [this a z]
     (slicev this a z))
 
-  (add [_ i o] (throw (UnsupportedOperationException.)))
-  (addAll [_ i c] (throw (UnsupportedOperationException.)))
-  (^Object remove [_ ^int i] (throw (UnsupportedOperationException.)))
-  (set [_ i e] (throw (UnsupportedOperationException.))))
+  (add [_ i o]               (throw-unsupported))
+  (addAll [_ i c]            (throw-unsupported))
+  (^Object remove [_ ^int i] (throw-unsupported))
+  (set [_ i e]               (throw-unsupported)))
 
 (extend-protocol AsRRBT
   Vec
@@ -979,7 +1240,11 @@
     (let [v     (.-v this)
           start (.-start this)
           end   (.-end this)]
-      (slicev (as-rrbt v) start end))))
+      (slicev (as-rrbt v) start end)))
+
+  java.util.Map$Entry
+  (as-rrbt [^java.util.Map$Entry this]
+    (as-rrbt [(.getKey this) (.getValue this)])))
 
 (defn shift-from-to [^NodeManager nm node from to]
   (cond

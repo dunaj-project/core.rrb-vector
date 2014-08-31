@@ -8,21 +8,24 @@
            (clojure.core.rrb_vector.rrbt Vector)
            (clojure.core.rrb_vector.nodes NodeManager)))
 
+(defn accessors-for [v]
+  (condp identical? (class v)
+    PersistentVector [#(.-root ^PersistentVector %)
+                      #(.-shift ^PersistentVector %)
+                      #(.-tail ^PersistentVector %)
+                      object-nm]
+    Vec              [#(.-root ^Vec %)
+                      #(.-shift ^Vec %)
+                      #(.-tail ^Vec %)
+                      primitive-nm]
+    Vector           [#(.-root ^Vector %)
+                      #(.-shift ^Vector %)
+                      #(.-tail ^Vector %)
+                      (.-nm ^Vector v)]))
+
 (defn dbg-vec [v]
   (let [[extract-root extract-shift extract-tail ^NodeManager nm]
-        (condp identical? (class v)
-          PersistentVector [#(.-root ^PersistentVector %)
-                            #(.-shift ^PersistentVector %)
-                            #(.-tail ^PersistentVector %)
-                            object-nm]
-          Vec              [#(.-root ^Vec %)
-                            #(.-shift ^Vec %)
-                            #(.-tail ^Vec %)
-                            primitive-nm]
-          Vector           [#(.-root ^Vector %)
-                            #(.-shift ^Vector %)
-                            #(.-tail ^Vector %)
-                            (.-nm ^Vector v)])
+        (accessors-for v)
         root  (extract-root v)
         shift (extract-shift v)
         tail  (extract-tail v)]
@@ -69,6 +72,16 @@
         i
         -1))))
 
+(defn same-coll? [a b]
+  (and (= (count a)
+          (count b)
+          (.size ^java.util.Collection a)
+          (.size ^java.util.Collection b))
+       (= a b)
+       (= b a)
+       (= (hash a) (hash b))
+       (= (.hashCode ^Object a) (.hashCode ^Object b))))
+
 (defn check-subvec [init & starts-and-ends]
   (let [v1 (loop [v   (vec (range init))
                   ses (seq starts-and-ends)]
@@ -82,13 +95,13 @@
                (let [[s e] ses]
                  (recur (fv/subvec v s e) (nnext ses)))
                v))]
-    (= v1 v2)))
+    (same-coll? v1 v2)))
 
 (defn check-catvec [& counts]
   (let [ranges (map range counts)
         v1 (apply concat ranges)
         v2 (apply fv/catvec (map fv/vec ranges))]
-    (= v1 v2)))
+    (same-coll? v1 v2)))
 
 (defn generative-check-subvec [iterations max-init-cnt slices]
   (dotimes [_ iterations]
@@ -127,3 +140,19 @@
         (throw
          (ex-info "check-catvec failure w/o Exception" {:cnts cnts})))))
   true)
+
+(defn count-nodes [& vs]
+  (let [m (java.util.IdentityHashMap.)]
+    (doseq [v vs]
+      (let [[extract-root extract-shift extract-tail ^NodeManager nm]
+            (accessors-for v)]
+        (letfn [(go [n shift]
+                  (when n
+                    (.put m n n)
+                    (if-not (zero? shift)
+                      (let [arr (.array nm n)
+                            ns  (take 32 arr)]
+                        (doseq [n ns]
+                          (go n (- shift 5)))))))]
+          (go (extract-root v) (extract-shift v)))))
+    (.size m)))
