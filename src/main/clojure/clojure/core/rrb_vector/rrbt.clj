@@ -776,6 +776,8 @@
                  (.editableRoot transient-helper nm am root)
                  (.editableTail transient-helper am tail)
                  (.alength am tail)))
+  (asTransient [this size-hint]
+    (.asTransient this))
 
   IVecImpl
   (tailoff [_]
@@ -1603,6 +1605,11 @@
              (unchecked-inc-int j)
              (unchecked-dec-int len)))))
 
+(defprotocol ITransientHelper
+  (-shift [this])
+  (-tail [this])
+  (-root [this]))
+
 (deftype Transient [^NodeManager nm ^ArrayManager am
                     ^boolean objects?
                     ^:unsynchronized-mutable ^int cnt
@@ -1610,6 +1617,10 @@
                     ^:unsynchronized-mutable root
                     ^:unsynchronized-mutable tail
                     ^:unsynchronized-mutable ^int tidx]
+  ITransientHelper
+  (-shift [this] shift)
+  (-tail [this] tail)
+  (-root [this] root)
   clojure.lang.Counted
   (count [this]
     (.ensureEditable transient-helper nm root)
