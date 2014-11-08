@@ -1,7 +1,7 @@
 (ns clojure.core.rrb-vector.nodes
   (:import (clojure.core VecNode ArrayManager)
            (clojure.lang PersistentVector PersistentVector$Node)
-           (java.util.concurrent.atomic AtomicBoolean)))
+           (java.util.concurrent.atomic AtomicReference)))
 
 ;;; array managers
 
@@ -25,10 +25,10 @@
 ;;; node managers
 
 (definterface NodeManager
-  (node [^java.util.concurrent.atomic.AtomicBoolean edit arr])
+  (node [^java.util.concurrent.atomic.AtomicReference edit arr])
   (empty [])
   (array [node])
-  (^java.util.concurrent.atomic.AtomicBoolean edit [node])
+  (^java.util.concurrent.atomic.AtomicReference edit [node])
   (^boolean regular [node])
   (clone [^clojure.core.ArrayManager am ^int shift node]))
 

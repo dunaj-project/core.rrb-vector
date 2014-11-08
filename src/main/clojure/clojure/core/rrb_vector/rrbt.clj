@@ -17,7 +17,7 @@
            (clojure.lang RT Util Box PersistentVector
                          APersistentVector$SubVector)
            (clojure.core.rrb_vector.nodes NodeManager)
-           (java.util.concurrent.atomic AtomicBoolean)))
+           (java.util.concurrent.atomic AtomicReference)))
 
 (def ^:const rrbt-concat-threshold 33)
 (def ^:const max-extra-search-steps 2)
@@ -66,7 +66,7 @@
   (arrayFor [^int i])
   (pushTail [^int shift ^int cnt parent tailnode])
   (popTail [^int shift ^int cnt node])
-  (newPath [^java.util.concurrent.atomic.AtomicBoolean edit ^int shift node])
+  (newPath [^java.util.concurrent.atomic.AtomicReference edit ^int shift node])
   (doAssoc [^int shift node ^int i val]))
 
 (deftype VecSeq [^ArrayManager am ^IVecImpl vec anode ^int i ^int offset
@@ -954,7 +954,7 @@
             (aset new-rngs 32 (unchecked-dec-int (aget new-rngs (int 32))))
             (.node nm (.edit nm root) arr))))))
 
-  (newPath [this ^AtomicBoolean edit ^int shift node]
+  (newPath [this ^AtomicReference edit ^int shift node]
     (if (== (.alength am tail) (int 32))
       (let [shift (int shift)]
         (loop [s (int 0) node node]
@@ -1753,7 +1753,7 @@
 
   (persistent [this]
     (.ensureEditable transient-helper nm root)
-    (.set (.edit nm root) false)
+    (.set (.edit nm root) nil)
     (let [trimmed-tail (.array am tidx)]
       (array-copy am tail 0 trimmed-tail 0 tidx)
       (Vector. nm am cnt shift root trimmed-tail nil -1 -1)))

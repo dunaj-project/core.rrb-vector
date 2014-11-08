@@ -2,7 +2,7 @@
   (:require [clojure.core.rrb-vector.nodes :refer [ranges last-range]])
   (:import (clojure.core.rrb_vector.nodes NodeManager)
            (clojure.core ArrayManager)
-           (java.util.concurrent.atomic AtomicBoolean)))
+           (java.util.concurrent.atomic AtomicReference)))
 
 (definterface ITransientHelper
   (editableRoot [^clojure.core.rrb_vector.nodes.NodeManager nm
@@ -14,33 +14,33 @@
                    root])
   (ensureEditable [^clojure.core.rrb_vector.nodes.NodeManager nm
                    ^clojure.core.ArrayManager am
-                   ^java.util.concurrent.atomic.AtomicBoolean root-edit
+                   ^java.util.concurrent.atomic.AtomicReference root-edit
                    current-node
                    ^int shift])
   (pushTail [^clojure.core.rrb_vector.nodes.NodeManager nm
              ^clojure.core.ArrayManager am
              ^int shift
              ^int cnt
-             ^java.util.concurrent.atomic.AtomicBoolean root-edit
+             ^java.util.concurrent.atomic.AtomicReference root-edit
              current-node
              tail-node])
   (popTail [^clojure.core.rrb_vector.nodes.NodeManager nm
             ^clojure.core.ArrayManager am
             ^int shift
             ^int cnt
-            ^java.util.concurrent.atomic.AtomicBoolean root-edit
+            ^java.util.concurrent.atomic.AtomicReference root-edit
             current-node])
   (doAssoc [^clojure.core.rrb_vector.nodes.NodeManager nm
             ^clojure.core.ArrayManager am
             ^int shift
-            ^java.util.concurrent.atomic.AtomicBoolean root-edit
+            ^java.util.concurrent.atomic.AtomicReference root-edit
             current-node
             ^int i
             val])
   (newPath [^clojure.core.rrb_vector.nodes.NodeManager nm
             ^clojure.core.ArrayManager am
             tail
-            ^java.util.concurrent.atomic.AtomicBoolean edit
+            ^java.util.concurrent.atomic.AtomicReference edit
             ^int shift
             current-node]))
 
@@ -48,7 +48,7 @@
   (reify ITransientHelper
     (editableRoot [this nm am root]
       (.node nm
-             (AtomicBoolean. true)
+             (AtomicReference. (Thread/currentThread))
              (clojure.core/aclone ^objects (.array nm root))))
 
     (editableTail [this am tail]
@@ -59,8 +59,12 @@
     (ensureEditable [this nm root]
       (let [owner (->> root (.edit nm) (.get))]
         (cond
-          owner
+          (identical? owner (Thread/currentThread))
           nil
+
+          (not (nil? owner))
+          (throw
+           (IllegalAccessError. "Transient used by non-owner thread"))
 
           :else
           (throw
