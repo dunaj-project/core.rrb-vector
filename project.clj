@@ -1,11 +1,11 @@
-(defproject org.clojure/core.rrb-vector "0.0.12-SNAPSHOT"
+(defproject org.dunaj/core.rrb-vector "0.0.12-dunaj-SNAPSHOT"
   :description "RRB-Trees for Clojure(Script) -- see Bagwell & Rompf"
   :url "https://github.com/clojure/core.rrb-vector"
   :license {:name "Eclipse Public License"
             :url "http://www.eclipse.org/legal/epl-v10.html"}
   :min-lein-version "2.2.0"
   :parent [org.clojure/pom.contrib "0.1.2"]
-  :dependencies [[org.clojure/clojure "1.5.1"]]
+  :dependencies [#_[org.clojure/clojure "1.5.1"]]
   :source-paths ["src/main/clojure"
                  "src/main/cljs"]
   :test-paths ["src/test/clojure"]
