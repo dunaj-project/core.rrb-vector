@@ -8,6 +8,8 @@
 .lein-failures
 .lein-plugins
 .lein-repl-history
+pom.xml
+pom.xml.*
 /.repl
 /out
 /repl
