@@ -13,3 +13,5 @@ pom.xml.*
 /.repl
 /out
 /repl
+.\#*
+/.nrepl-port

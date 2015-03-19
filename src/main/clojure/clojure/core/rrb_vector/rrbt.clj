@@ -19,6 +19,8 @@
            (clojure.core.rrb_vector.nodes NodeManager)
            (java.util.concurrent.atomic AtomicReference)))
 
+(set! *unchecked-math* :warn-on-boxed)
+
 (def ^:const rrbt-concat-threshold 33)
 (def ^:const max-extra-search-steps 2)
 
@@ -35,7 +37,7 @@
 
 (defmacro dbg- [& args])
 
-(defn ^:private throw-unsupported []
+(defn throw-unsupported []
   (throw (UnsupportedOperationException.)))
 
 (defmacro compile-if [test then else]
@@ -77,12 +79,13 @@
   (internal-reduce
    [_ f val]
    (loop [result val
-          aidx offset]
+          aidx i
+          off offset]
      (if (< aidx (count vec))
        (let [node (.arrayFor vec aidx)
              alen (.alength am node)
              result (loop [result result
-                           node-idx 0]
+                           node-idx off]
                       (if (< node-idx alen)
                         (let [result (f result (.aget am node node-idx))]
                           (if (reduced? result)
@@ -91,7 +94,7 @@
                         result))]
          (if (reduced? result)
            @result
-           (recur result (+ aidx alen))))
+           (recur result (+ aidx alen) 0)))
        result)))
 
   Object
@@ -1272,6 +1275,11 @@
            (unchecked-add-int (int 5) (int from))
            to)))
 
+(defn pair ^"[Ljava.lang.Object;" [x y]
+  (doto (object-array 2)
+    (aset 0 x)
+    (aset 1 y)))
+
 (defn slot-count [^NodeManager nm ^ArrayManager am node shift]
   (let [arr (.array nm node)]
     (if (zero? shift)
@@ -1313,7 +1321,7 @@
         e    (- a (inc (quot (dec p) 32)))]
     (cond
       (<= e max-extra-search-steps)
-      (object-array (list n1 n2))
+      (pair n1 n2)
 
       (<= (+ sbc1 sbc2) 1024)
       (let [reg?    (zero? (mod p 32))
@@ -1334,7 +1342,7 @@
         (if-not reg?
           (aset new-arr 32 (regular-ranges 5 p)))
         (set! (.-val transferred-leaves) sbc2)
-        (object-array (list new-n1 nil)))
+        (pair new-n1 nil))
 
       :else
       (let [reg?     (zero? (mod p 32))
@@ -1359,7 +1367,7 @@
         (if-not reg?
           (aset new-arr2 32 (regular-ranges 5 (- p 1024))))
         (set! (.-val transferred-leaves) (- 1024 sbc1))
-        (object-array (list new-n1 new-n2))))))
+        (pair new-n1 new-n2)))))
 
 (defn child-seq [^NodeManager nm node shift cnt]
   (let [arr  (.array nm node)
@@ -1379,7 +1387,7 @@
 (defn rebalance
   [^NodeManager nm ^ArrayManager am shift n1 cnt1 n2 cnt2 ^Box transferred-leaves]
   (if (nil? n2)
-    (object-array (list n1 nil))
+    (pair n1 nil)
     (let [slc1 (slot-count nm am n1 shift)
           slc2 (slot-count nm am n2 shift)
           a    (+ slc1 slc2)
@@ -1389,7 +1397,7 @@
           e    (- a (inc (quot (dec p) 32)))]
       (cond
         (<= e max-extra-search-steps)
-        (object-array (list n1 n2))
+        (pair n1 n2)
 
         (<= (+ sbc1 sbc2) 1024)
         (let [new-arr  (object-array 33)
@@ -1417,7 +1425,7 @@
                 (recur (inc i) (next bs)))))
           (aset new-arr 32 new-rngs)
           (set! (.-val transferred-leaves) cnt2)
-          (object-array (list new-n1 nil)))
+          (pair new-n1 nil))
 
         :else
         (let [new-arr1  (object-array 33)
@@ -1459,7 +1467,7 @@
                 (recur (inc i) (next bs)))))
           (aset new-arr1 32 new-rngs1)
           (aset new-arr2 32 new-rngs2)
-          (object-array (list new-n1 new-n2)))))))
+          (pair new-n1 new-n2))))))
 
 (defn zippath
   [^NodeManager nm ^ArrayManager am shift n1 cnt1 n2 cnt2 ^Box transferred-leaves]
@@ -1504,7 +1512,7 @@
         li2   (index-of-nil arr2)
         slots (concat (take li1 arr1) (take li2 arr2))]
     (if (> (count slots) 32)
-      (object-array (list n1 n2))
+      (pair n1 n2)
       (let [new-rngs (int-array 33)
             new-arr  (object-array 33)
             rngs1    (take li1 (if (.regular nm n1)
@@ -1526,7 +1534,7 @@
             (do (aset new-rngs i (int (first rngs)))
                 (recur (inc i) (next rngs)))
             (aset new-rngs 32 i)))
-        (object-array (list (.node nm nil new-arr) nil))))))
+        (pair (.node nm nil new-arr) nil)))))
 
 (defn splice-rrbts [^NodeManager nm ^ArrayManager am ^Vector v1 ^Vector v2]
   (cond
