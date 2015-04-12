@@ -19,6 +19,7 @@
            (clojure.core.rrb_vector.nodes NodeManager)
            (java.util.concurrent.atomic AtomicReference)))
 
+(set! *warn-on-reflection* true)
 (set! *unchecked-math* :warn-on-boxed)
 
 (def ^:const rrbt-concat-threshold 33)
@@ -432,7 +433,8 @@
               (when (< j new-len)
                 (aset rngs j r)
                 (recur (unchecked-inc-int j) (unchecked-add-int r step))))
-            (aset rngs (dec new-len) (- end start))
+            (when (> new-len 1)
+              (aset rngs (dec new-len) (- end start)))
             (aset rngs 32 new-len)
             (System/arraycopy arr (if (nil? new-child) (unchecked-inc-int i) i)
                               new-arr 0

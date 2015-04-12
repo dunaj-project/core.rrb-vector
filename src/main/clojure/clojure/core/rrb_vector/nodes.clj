@@ -3,6 +3,7 @@
            (clojure.lang PersistentVector PersistentVector$Node)
            (java.util.concurrent.atomic AtomicReference)))
 
+(set! *warn-on-reflection* true)
 (set! *unchecked-math* :warn-on-boxed)
 
 ;;; array managers
@@ -224,7 +225,7 @@
               (aset rngs j r)
               (recur (inc j) (+ r step))))
           (aset rngs i (int (last-range nm child)))
-          (.node nm nil arr))))
+          (.node nm nil new-arr))))
     (let [rngs     (ranges nm parent)
           new-rngs (aclone rngs)
           i        (dec (aget rngs 32))

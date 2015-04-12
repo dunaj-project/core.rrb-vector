@@ -1,7 +1,10 @@
 (ns clojure.core.rrb-vector-test
   (:require [clojure.core.rrb-vector :as fv]
             [clojure.core.rrb-vector.debug :as dv]
-            [clojure.core.reducers :as r])
+            [clojure.core.reducers :as r]
+            [clojure.test.check :as tc]
+            [clojure.test.check.properties :as prop]
+            [clojure.test.check.generators :as gen])
   (:use clojure.test
         clojure.template)
   (:import (clojure.lang ExceptionInfo)
@@ -137,3 +140,16 @@
         (list-iterator (seq v))     2048
         (list-iterator v 100)       1948
         (list-iterator (seq v) 100) 1948))))
+
+(deftest test-reduce-subvec-catvec
+  (letfn [(insert-by-sub-catvec [v n]
+            (fv/catvec (fv/subvec v 0 n) (fv/vec ['x]) (fv/subvec v n)))
+          (repeated-subvec-catvec [i]
+            (reduce insert-by-sub-catvec (fv/vec (range i)) (range i 0 -1)))]
+    (is (= (repeated-subvec-catvec 2371) (interleave (range 2371) (repeat 'x))))
+    (is (tc/quick-check 100
+          (prop/for-all [cnt (gen/fmap
+                               (comp inc #(mod % 60000))
+                               gen/pos-int)]
+            (= (repeated-subvec-catvec cnt)
+               (interleave (range cnt) (repeat 'x))))))))
