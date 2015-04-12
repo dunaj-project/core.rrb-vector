@@ -1,4 +1,4 @@
-(defproject org.dunaj/core.rrb-vector "0.0.12-dunaj_pre3"
+(defproject org.dunaj/core.rrb-vector "0.0.12-dunaj_pre4"
   :description "RRB-Trees for Clojure(Script) -- see Bagwell & Rompf"
   :url "https://github.com/clojure/core.rrb-vector"
   :license {:name "Eclipse Public License"
